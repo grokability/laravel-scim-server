@@ -113,7 +113,7 @@ class ResourceController extends Controller
         /**
          * @var Model
         */
-        $resourceObject = $class::findOrCreate(['username' => $input['userName']]);
+        $resourceObject = $class::firstOrNew(['username' => $input['userName']]);
 
         $allAttributeConfigs = [];
 

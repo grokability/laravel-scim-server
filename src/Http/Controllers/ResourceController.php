@@ -111,9 +111,9 @@ class ResourceController extends Controller
         $class = $resourceType->getClass();
 
         /**
- * @var Model
-*/
-        $resourceObject = new $class();
+         * @var Model
+        */
+        $resourceObject = $class::findOrCreate(['username' => $input['userName']]);
 
         $allAttributeConfigs = [];
 

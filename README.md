@@ -3,6 +3,13 @@
 [![Latest Stable Version](https://poser.pugx.org/arietimmerman/laravel-scim-server/v/stable)](https://packagist.org/packages/arietimmerman/laravel-scim-server)
 [![Total Downloads](https://poser.pugx.org/arietimmerman/laravel-scim-server/downloads)](https://packagist.org/packages/arietimmerman/laravel-scim-server)
 
+# (Grokability Fork Notes)
+
+This is a lightly-edited fork of the original at https://github.com/arietimmerman/laravel-scim-server. Any changes we have made we have offered up to the original maintainer. You should look at their fork, not ours - as ours is specific to our needs within Snipe-IT. As of this writing, there are only two:
+
+- One that handles a call to `getNode()` when `getDefaultSchema()` returns `null`
+- One that modifies how users are created from SCIM when the username matches an already-existing username in the local database.
+
 # SCIM 2.0 Server implementation for Laravel
 
 Add SCIM 2.0 Server capabilities with ease. Usually, no configuration is needed in order to benefit from the basic functionalities.

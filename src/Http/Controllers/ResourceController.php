@@ -19,6 +19,7 @@ use ArieTimmerman\Laravel\SCIMServer\SCIM\Schema;
 use ArieTimmerman\Laravel\SCIMServer\PolicyDecisionPoint;
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\Validator;
+use Log;
 
 class ResourceController extends Controller
 {
@@ -152,6 +153,49 @@ class ResourceController extends Controller
     }
 
     /**
+     * Log a SCIM controller method invocation (if configured)
+     * 
+     */
+    public function scimlog(Callable $function, Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, ...$params)
+    {
+        // I really wanted to include the 'Model' up there in the signature, but the index method doesn't have a model
+        // and I realized I can derive enough of the model information from the URL, so I figured this way is okay,
+        // and the above signature *will* work for any of the SCIM methods we have here in this controller.
+
+        // Also the Callable $function expects the value of $this as the first parameter, which, in all of the
+        // function definitions, we call $that - to avoid naming conflicts with $this. It's a little weird. Keep an
+        // eye out (also comments embedded in each invocation of this method, just to be clear.
+        if (config('scim.trace')) {
+            try {
+                $response = $function($this, $request, $pdp, $resourceType, ...$params);
+                $response_text = method_exists($response, 'toJson') ? $response->toJson() : $response; // very not sure about this; not sure if other responses will parse right - FIXME
+                $logmsg = <<< EOF
+                =====================================================================================
+                {$request->method()} {$request->url()}
+                
+                {$request->getContent()}
+                -------------------------------------------------------------------------------------
+                $response_text
+                EOF;
+                Log::channel('scimtrace')->info($logmsg);
+                return $response;
+            } catch (\Throwable $e) {
+                $error_class = get_class($e);
+                Log::channel('scimtrace')->error(<<<EOF
+                =====================================================================================
+                Exception caught! {$e->getMessage()} of type: $error_class when executing:
+                {$request->method()} {$request->url()}
+
+                {$request->getContent()}
+                EOF);
+            }
+        } else {
+            return $function($this, $request, $pdp, $resourceType, ...$params);
+        }
+    }
+
+
+    /**
      * Create a new scim resource
      *
      * @param  Request      $request
@@ -161,172 +205,194 @@ class ResourceController extends Controller
      */
     public function create(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, $isMe = false)
     {
-        $resourceObject = $this->createObject($request, $pdp, $resourceType, $isMe);
+        return $this->scimlog(function ($that, $request,  $pdp, $resourceType, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $resourceObject = $that->createObject($request, $pdp, $resourceType, $isMe);
 
-        return Helper::objectToSCIMCreateResponse($resourceObject, $resourceType);
+            return Helper::objectToSCIMCreateResponse($resourceObject, $resourceType);
+
+        }, $request, $pdp, $resourceType, $isMe); /* okay *HERE* I don't need it, right? */
     }
 
     public function show(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject)
     {
-        event(new Get($resourceObject));
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            event(new Get($resourceObject));
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+        },$request, $pdp, $resourceType, $resourceObject);
     }
 
     public function delete(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject)
     {
-        $resourceObject->delete();
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $resourceObject->delete();
 
-        event(new Delete($resourceObject));
+            event(new Delete($resourceObject));
 
-        return response(null, 204);
+            return response(null, 204);
+
+        }, $request, $pdp, $resourceType, $resourceObject);
     }
 
     public function replace(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject, $isMe = false)
     {
-        $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
-        $original = Helper::flatten($originalRaw, $resourceType->getSchema());
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
+            $original = Helper::flatten($originalRaw, $resourceType->getSchema());
 
-        //TODO: get flattend from $resourceObject
-        $flattened = Helper::flatten($request->input(), $resourceType->getSchema());
-        $flattened = $this->validateScim($resourceType, $flattened, $resourceObject);
+            //TODO: get flattend from $resourceObject
+            $flattened = Helper::flatten($request->input(), $resourceType->getSchema());
+            $flattened = $that->validateScim($resourceType, $flattened, $resourceObject);
 
-        $updated = [];
+            $updated = [];
 
-        foreach ($flattened as $key => $value) {
-            if (!isset($original[$key]) || json_encode($original[$key]) != json_encode($flattened[$key])) {
-                $updated[$key] = $flattened[$key];
-            }
-        }
-
-        if (!self::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PUT, $updated, $resourceType, null)) {
-            throw new SCIMException('This is not allowed');
-        }
-
-        //Keep an array of written values
-        $uses = [];
-
-        //Write all values
-        foreach ($flattened as $scimAttribute => $value) {
-            $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $scimAttribute);
-
-            if ($attributeConfig->isWriteSupported()) {
-                $attributeConfig->replace($value, $resourceObject);
-            }
-
-            $uses[] = $attributeConfig;
-        }
-
-        //Find values that have not been written in order to empty these.
-        $allAttributeConfigs = $resourceType->getAllAttributeConfigs();
-
-        foreach ($uses as $use) {
-            foreach ($allAttributeConfigs as $key => $option) {
-                if ($use->getFullKey() == $option->getFullKey()) {
-                    unset($allAttributeConfigs[$key]);
+            foreach ($flattened as $key => $value) {
+                if (!isset($original[$key]) || json_encode($original[$key]) != json_encode($flattened[$key])) {
+                    $updated[$key] = $flattened[$key];
                 }
             }
-        }
 
-        foreach ($allAttributeConfigs as $attributeConfig) {
-            // Do not write write-only attribtues (such as passwords)
-            if ($attributeConfig->isReadSupported() && $attributeConfig->isWriteSupported()) {
-                //   $attributeConfig->remove($resourceObject);
+            if (!self::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PUT, $updated, $resourceType, null)) {
+                throw new SCIMException('This is not allowed');
             }
-        }
 
-        $resourceObject->save();
+            //Keep an array of written values
+            $uses = [];
 
-        event(new Replace($resourceObject, $isMe, $originalRaw));
+            //Write all values
+            foreach ($flattened as $scimAttribute => $value) {
+                $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $scimAttribute);
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+                if ($attributeConfig->isWriteSupported()) {
+                    $attributeConfig->replace($value, $resourceObject);
+                }
+
+                $uses[] = $attributeConfig;
+            }
+
+            //Find values that have not been written in order to empty these.
+            $allAttributeConfigs = $resourceType->getAllAttributeConfigs();
+
+            foreach ($uses as $use) {
+                foreach ($allAttributeConfigs as $key => $option) {
+                    if ($use->getFullKey() == $option->getFullKey()) {
+                        unset($allAttributeConfigs[$key]);
+                    }
+                }
+            }
+
+            foreach ($allAttributeConfigs as $attributeConfig) {
+                // Do not write write-only attribtues (such as passwords)
+                if ($attributeConfig->isReadSupported() && $attributeConfig->isWriteSupported()) {
+                    //   $attributeConfig->remove($resourceObject);
+                }
+            }
+
+            $resourceObject->save();
+
+            event(new Replace($resourceObject, $isMe, $originalRaw));
+
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+        }, $request, $pdp, $resourceType, $resourceObject, $isMe);
     }
 
     public function update(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject, $isMe = false)
     {
-        $input = $request->input();
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $input = $request->input();
 
-        if ($input['schemas'] !== ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]) {
-            throw (new SCIMException(sprintf('Invalid schema "%s". MUST be "urn:ietf:params:scim:api:messages:2.0:PatchOp"', json_encode($input['schemas']))))->setCode(404);
-        }
+            if ($input['schemas'] !== ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]) {
+                throw (new SCIMException(sprintf('Invalid schema "%s". MUST be "urn:ietf:params:scim:api:messages:2.0:PatchOp"', json_encode($input['schemas']))))->setCode(404);
+            }
 
-        if (isset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'])) {
-            $input['Operations'] = $input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'];
-            unset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations']);
-        }
+            if (isset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'])) {
+                $input['Operations'] = $input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'];
+                unset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations']);
+            }
 
-        $oldObject = Helper::objectToSCIMArray($resourceObject, $resourceType);
+            $oldObject = Helper::objectToSCIMArray($resourceObject, $resourceType);
 
-        foreach ($input['Operations'] as $operation) {
-            switch (strtolower($operation['op'])) {
-                case "add":
-                    if (isset($operation['path'])) {
-                        $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $operation['path']);
-                        foreach ((array) $operation['value'] as $value) {
-                            $attributeConfig->add($value, $resourceObject);
-                        }
-                    } else {
-                        foreach ((array) $operation['value'] as $key => $value) {
-                            $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $key);
+            foreach ($input['Operations'] as $operation) {
+                switch (strtolower($operation['op'])) {
+                    case "add":
+                        if (isset($operation['path'])) {
+                            $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $operation['path']);
+                            foreach ((array)$operation['value'] as $value) {
+                                $attributeConfig->add($value, $resourceObject);
+                            }
+                        } else {
+                            foreach ((array)$operation['value'] as $key => $value) {
+                                $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $key);
 
-                            foreach ((array) $value as $v) {
-                                $attributeConfig->add($v, $resourceObject);
+                                foreach ((array)$value as $v) {
+                                    $attributeConfig->add($v, $resourceObject);
+                                }
                             }
                         }
-                    }
 
-                    break;
+                        break;
 
-                case "remove":
-                    if (isset($operation['path'])) {
-                        $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $operation['path']);
-                        $attributeConfig->remove($operation['value'] ?? null, $resourceObject);
-                    } else {
-                        throw new SCIMException('You MUST provide a "Path"');
-                    }
-
-
-                    break;
-
-                case "replace":
-                    if (isset($operation['path'])) {
-                        // Removed this check. A replace with a null/empty value should be valid.
-                        // if(!isset($operation['value'])){
-                        //     throw new SCIMException('Please provide a "value"',400);
-                        // }
-
-                        $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $operation['path']);
-                        $attributeConfig->replace($operation['value'], $resourceObject);
-                    } else {
-                        foreach ((array) $operation['value'] as $key => $value) {
-                            $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $key);
-                            $attributeConfig->replace($value, $resourceObject);
+                    case "remove":
+                        if (isset($operation['path'])) {
+                            $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $operation['path']);
+                            $attributeConfig->remove($operation['value'] ?? null, $resourceObject);
+                        } else {
+                            throw new SCIMException('You MUST provide a "Path"');
                         }
-                    }
 
-                    break;
 
-                default:
-                    throw new SCIMException(sprintf('Operation "%s" is not supported', $operation['op']));
+                        break;
+
+                    case "replace":
+                        if (isset($operation['path'])) {
+                            // Removed this check. A replace with a null/empty value should be valid.
+                            // if(!isset($operation['value'])){
+                            //     throw new SCIMException('Please provide a "value"',400);
+                            // }
+
+                            $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $operation['path']);
+                            $attributeConfig->replace($operation['value'], $resourceObject);
+                        } else {
+                            foreach ((array)$operation['value'] as $key => $value) {
+                                $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $key);
+                                $attributeConfig->replace($value, $resourceObject);
+                            }
+                        }
+
+                        break;
+
+                    default:
+                        throw new SCIMException(sprintf('Operation "%s" is not supported', $operation['op']));
+                }
             }
-        }
 
-        $dirty = $resourceObject->getDirty();
+            $dirty = $resourceObject->getDirty();
 
-        // TODO: prevent something from getten written before ...
-        $newObject = Helper::flatten(Helper::objectToSCIMArray($resourceObject, $resourceType), $resourceType->getSchema());
+            // TODO: prevent something from getten written before ...
+            $newObject = Helper::flatten(Helper::objectToSCIMArray($resourceObject, $resourceType), $resourceType->getSchema());
 
-        $flattened = $this->validateScim($resourceType, $newObject, $resourceObject);
+            $flattened = $that->validateScim($resourceType, $newObject, $resourceObject);
 
-        if (!self::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PATCH, $flattened, $resourceType, null)) {
-            throw new SCIMException('This is not allowed');
-        }
+            if (!self::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PATCH, $flattened, $resourceType, null)) {
+                throw new SCIMException('This is not allowed');
+            }
 
-        $resourceObject->save();
+            $resourceObject->save();
 
-        event(new Patch($resourceObject, $isMe, $oldObject));
+            event(new Patch($resourceObject, $isMe, $oldObject));
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+        }, $request, $pdp, $resourceType, $resourceObject, $isMe);
     }
 
 
@@ -343,53 +409,57 @@ class ResourceController extends Controller
 
     public function index(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType)
     {
-        $class = $resourceType->getClass();
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $class = $resourceType->getClass();
 
-        // The 1-based index of the first query result. A value less than 1 SHALL be interpreted as 1.
-        $startIndex = max(1, intVal($request->input('startIndex', 0)));
+            // The 1-based index of the first query result. A value less than 1 SHALL be interpreted as 1.
+            $startIndex = max(1, intVal($request->input('startIndex', 0)));
 
-        // Non-negative integer. Specifies the desired maximum number of query results per page, e.g., 10. A negative value SHALL be interpreted as "0". A value of "0" indicates that no resource results are to be returned except for "totalResults".
-        $count = max(0, intVal($request->input('count', 10)));
+            // Non-negative integer. Specifies the desired maximum number of query results per page, e.g., 10. A negative value SHALL be interpreted as "0". A value of "0" indicates that no resource results are to be returned except for "totalResults".
+            $count = max(0, intVal($request->input('count', 10)));
 
-        $sortBy = null;
+            $sortBy = null;
 
-        if ($request->input('sortBy')) {
-            $sortBy = Helper::getEloquentSortAttribute($resourceType, $request->input('sortBy'));
-        }
-
-        $resourceObjectsBase = $class::when(
-            $filter = $request->input('filter'),
-            function ($query) use ($filter, $resourceType) {
-                $parser = new Parser(Mode::FILTER());
-
-                try {
-                    $node = $parser->parse($filter);
-
-                    Helper::scimFilterToLaravelQuery($resourceType, $query, $node);
-                } catch (\Tmilos\ScimFilterParser\Error\FilterException $e) {
-                    throw (new SCIMException($e->getMessage()))->setCode(400)->setScimType('invalidFilter');
-                }
+            if ($request->input('sortBy')) {
+                $sortBy = Helper::getEloquentSortAttribute($resourceType, $request->input('sortBy'));
             }
-        );
 
-        $totalResults = $resourceObjectsBase->count();
+            $resourceObjectsBase = $class::when(
+                $filter = $request->input('filter'),
+                function ($query) use ($filter, $resourceType) {
+                    $parser = new Parser(Mode::FILTER());
 
-        $resourceObjects = $resourceObjectsBase->skip($startIndex - 1)->take($count);
+                    try {
+                        $node = $parser->parse($filter);
 
-        $resourceObjects = $resourceObjects->with($resourceType->getWithRelations());
+                        Helper::scimFilterToLaravelQuery($resourceType, $query, $node);
+                    } catch (\Tmilos\ScimFilterParser\Error\FilterException $e) {
+                        throw (new SCIMException($e->getMessage()))->setCode(400)->setScimType('invalidFilter');
+                    }
+                }
+            );
 
-        if ($sortBy != null) {
-            $direction = $request->input('sortOrder') == 'descending' ? 'desc' : 'asc';
+            $totalResults = $resourceObjectsBase->count();
 
-            $resourceObjects = $resourceObjects->orderBy($sortBy, $direction);
-        }
+            $resourceObjects = $resourceObjectsBase->skip($startIndex - 1)->take($count);
 
-        $resourceObjects = $resourceObjects->get();
+            $resourceObjects = $resourceObjects->with($resourceType->getWithRelations());
+
+            if ($sortBy != null) {
+                $direction = $request->input('sortOrder') == 'descending' ? 'desc' : 'asc';
+
+                $resourceObjects = $resourceObjects->orderBy($sortBy, $direction);
+            }
+
+            $resourceObjects = $resourceObjects->get();
 
 
-        $attributes = [];
-        $excludedAttributes = [];
+            $attributes = [];
+            $excludedAttributes = [];
 
-        return new ListResponse($resourceObjects, $startIndex, $totalResults, $attributes, $excludedAttributes, $resourceType);
+            return new ListResponse($resourceObjects, $startIndex, $totalResults, $attributes, $excludedAttributes, $resourceType);
+        }, $request, $pdp, $resourceType);
     }
 }

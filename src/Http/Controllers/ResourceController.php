@@ -161,9 +161,13 @@ class ResourceController extends Controller
         // I really wanted to include the 'Model' up there in the signature, but the index method doesn't have a model
         // and I realized I can derive enough of the model information from the URL, so I figured this way is okay,
         // and the above signature *will* work for any of the SCIM methods we have here in this controller.
+
+        // Also the Callable $function expects the value of $this as the first parameter, which, in all of the
+        // function definitions, we call $that - to avoid naming conflicts with $this. It's a little weird. Keep an
+        // eye out (also comments embedded in each invocation of this method, just to be clear.
         if (config('scim.trace')) {
             try {
-                $response = $function($this/* ???? */, $request, $pdp, $resourceType, ...$params);
+                $response = $function($this, $request, $pdp, $resourceType, ...$params);
                 $response_text = method_exists($response, 'toJson') ? $response->toJson() : $response; // very not sure about this; not sure if other responses will parse right - FIXME
                 $logmsg = <<< EOF
                 =====================================================================================
@@ -202,6 +206,8 @@ class ResourceController extends Controller
     public function create(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, $isMe = false)
     {
         return $this->scimlog(function ($that, $request,  $pdp, $resourceType, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
             $resourceObject = $that->createObject($request, $pdp, $resourceType, $isMe);
 
             return Helper::objectToSCIMCreateResponse($resourceObject, $resourceType);
@@ -212,6 +218,8 @@ class ResourceController extends Controller
     public function show(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject)
     {
         return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
             event(new Get($resourceObject));
 
             return Helper::objectToSCIMResponse($resourceObject, $resourceType);
@@ -221,6 +229,8 @@ class ResourceController extends Controller
     public function delete(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject)
     {
         return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
             $resourceObject->delete();
 
             event(new Delete($resourceObject));
@@ -233,6 +243,8 @@ class ResourceController extends Controller
     public function replace(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject, $isMe = false)
     {
         return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
             $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
             $original = Helper::flatten($originalRaw, $resourceType->getSchema());
 
@@ -295,6 +307,8 @@ class ResourceController extends Controller
     public function update(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject, $isMe = false)
     {
         return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
             $input = $request->input();
 
             if ($input['schemas'] !== ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]) {
@@ -396,6 +410,8 @@ class ResourceController extends Controller
     public function index(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType)
     {
         return $this->scimlog(function ($that, $request, $pdp, $resourceType) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
             $class = $resourceType->getClass();
 
             // The 1-based index of the first query result. A value less than 1 SHALL be interpreted as 1.

@@ -10,14 +10,11 @@ function undefault_schema(\stdClass $parsed_json)
 {
     foreach($parsed_json AS $key => $value) {
         if (stristr($key,'urn:ietf:params:scim:schemas:core:') !== false) {
-            \Log::error("Found the schema key! It's: $key");
             unset($parsed_json->{$key}); //yank it out
             foreach($value AS $subkey => $subval) { //iterate through *its* subkey/subvals...
-                // TODO should we check if the original keys exist? ONly overwrite them if they don't?
+                // TODO should we check if the original keys exist? Only overwrite them if they don't?
                 $parsed_json->{$subkey} = $subval;
             }
-        } else {
-            \Log::error("didn't find schema key in $key");
         }
     }
     return $parsed_json; // FIXME - actually, uh, do the thing?
@@ -32,22 +29,20 @@ class SCIMHeaders
         }
         
         $response = $next($request);
-        \Log::error("Response is: ".print_r($response->content(),true));
-        $response_content = json_decode($response->content());
+        
+        if(config('scim.standards_compliance')) {
+            $response_content = json_decode($response->content());
 
-        if ( ! $response_content->totalResults) {
-            \Log::error("doing regular response parsing");
-            $response->setContent(json_encode(undefault_schema($response_content)));
-        } else {
-            \Log::error("doing array-ish work on response...");
-            $final_response = [];
-            foreach($response_content->Resources AS $index => $object) {
-                $final_response[] = undefault_schema($object);
+            if (!$response_content->totalResults) {
+                $response->setContent(json_encode(undefault_schema($response_content)));
+            } else {
+                $final_response = [];
+                foreach ($response_content->Resources as $index => $object) {
+                    $final_response[] = undefault_schema($object);
+                }
+                $response_content->Resources = $final_response;
+                $response->setContent(json_encode($response_content));
             }
-            $response_content->Resources = $final_response;
-            $response->setContent(json_encode($response_content));
-//        } else {
-//            \Log::error("UNKNOWN SCHEMA TYPE!!!! What's going on here?");
         }
         
         return $response->header('Content-Type', 'application/scim+json');

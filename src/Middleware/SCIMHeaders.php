@@ -17,7 +17,7 @@ function undefault_schema(\stdClass $parsed_json)
             }
         }
     }
-    return $parsed_json; // FIXME - actually, uh, do the thing?
+    return $parsed_json;
 }
 
 class SCIMHeaders
@@ -29,7 +29,7 @@ class SCIMHeaders
         }
         
         $response = $next($request);
-        
+
         if(config('scim.standards_compliance')) {
             $response_content = json_decode($response->content());
 

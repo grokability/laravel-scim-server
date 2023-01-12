@@ -246,10 +246,10 @@ class ResourceController extends Controller
             /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
                so we don't have $this available */
             $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
-            $original = Helper::flatten($originalRaw, $resourceType->getSchema());
+            $original = Helper::flatten($originalRaw, $request->input()['schemas']);
 
             //TODO: get flattend from $resourceObject
-            $flattened = Helper::flatten($request->input(), $resourceType->getSchema());
+            $flattened = Helper::flatten($request->input(), $request->input()['schemas']);
             $flattened = $that->validateScim($resourceType, $flattened, $resourceObject);
 
             $updated = [];

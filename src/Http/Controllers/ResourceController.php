@@ -171,7 +171,7 @@ class ResourceController extends Controller
                 $response_text = method_exists($response, 'toJson') ? $response->toJson() : $response; // very not sure about this; not sure if other responses will parse right - FIXME
                 $logmsg = <<< EOF
                 =====================================================================================
-                {$request->method()} {$request->url()}
+                {$request->method()} {$request->fullUrl()}
                 
                 {$request->getContent()}
                 -------------------------------------------------------------------------------------
@@ -184,7 +184,7 @@ class ResourceController extends Controller
                 Log::channel('scimtrace')->error(<<<EOF
                 =====================================================================================
                 Exception caught! {$e->getMessage()} of type: $error_class when executing:
-                {$request->method()} {$request->url()}
+                {$request->method()} {$request->fullUrl()}
 
                 {$request->getContent()}
                 EOF);

@@ -94,6 +94,16 @@ class Collection extends AttributeMapping
                         $o[$key]->add($value, $object);
                     }
                 }
+            )->setReplace(
+                function ($value, &$object) use ($key, $parent) {
+                    $collection = Collection::filterCollection($parent->filter, collect($parent->collection), $object);
+
+                    $result = [];
+
+                    foreach ($collection as $o) {
+                        $o[$key]->add($value, $object);
+                    }
+                }
             )->setRead(
                 function (&$object) use ($key, $parent) {
                     $collection = Collection::filterCollection($parent->filter, collect($parent->collection), $object);

@@ -9,10 +9,26 @@ This is a lightly-edited fork of the original at https://github.com/arietimmerma
 
 - One that handles a call to `getNode()` when `getDefaultSchema()` returns `null`
 - One that modifies how users are created from SCIM when the username matches an already-existing username in the local database.
+![Logo of Laravel SCIM Server, the SCIM server implementation from scim.dev, SCIM Playground](./laravel-scim-server.svg)
 
 # SCIM 2.0 Server implementation for Laravel
 
-Add SCIM 2.0 Server capabilities with ease. Usually, no configuration is needed in order to benefit from the basic functionalities.
+Add SCIM 2.0 Server capabilities to your Laravel application with ease. This package requires minimal configuration to get started with basic functionalities.
+
+This implementation is used by [The SCIM Playground](https://scim.dev) and is therefore one of the most widely tested SCIM servers available.
+## Docker
+
+To quickly spin up a SCIM test server using Docker, run:
+
+~~~
+docker run -d -p 8000:8000 --name laravel-scim-server ghcr.io/limosa-io/laravel-scim-server:latest
+~~~
+
+This command will start the server and bind it to port 8000 on your local machine. You can then access the SCIM endpoints at `http://localhost:8000/scim/v2/Users`. Other SCIM endpoints like `/Groups`, `/Schemas`, and `/ResourceTypes` will also be available.
+
+## Installation
+
+Simply run:
 
 ~~~
 composer require arietimmerman/laravel-scim-server
@@ -24,37 +40,29 @@ And optionally
 php artisan vendor:publish --tag=laravel-scim
 ~~~
 
-The module is used by [idaas.nl](https://www.idaas.nl/).
-
 # Routes
 
-~~~
-+----------+-----------------------------------------+
-| GET|HEAD | scim/v1                                 |
-| GET|HEAD | scim/v1/{fallbackPlaceholder}           |
-| POST     | scim/v2/.search                         |
-|          |                                         |
-| GET|HEAD | scim/v2/ResourceTypes                   |
-| GET|HEAD | scim/v2/ResourceTypes/{id}              |
-| GET|HEAD | scim/v2/Schemas                         |
-| GET|HEAD | scim/v2/Schemas/{id}                    |
-| GET|HEAD | scim/v2/ServiceProviderConfig           |
-| GET|HEAD | scim/v2/{fallbackPlaceholder}           |
-|          |                                         |
-| GET|HEAD | scim/v2/{resourceType}                  |
-|          |                                         |
-| POST     | scim/v2/{resourceType}                  |
-|          |                                         |
-| GET|HEAD | scim/v2/{resourceType}/{resourceObject} |
-|          |                                         |
-| PUT      | scim/v2/{resourceType}/{resourceObject} |
-|          |                                         |
-| PATCH    | scim/v2/{resourceType}/{resourceObject} |
-|          |                                         |
-| DELETE   | scim/v2/{resourceType}/{resourceObject} |
-|          |                                         |
-+----------+-----------------------------------------+
-~~~
+| Method | Path |
+|--------|------|
+| GET\|HEAD | / |
+| GET\|HEAD | scim/v1 |
+| GET\|HEAD | scim/v1/{fallbackPlaceholder} |
+| POST | scim/v2/.search |
+| POST | scim/v2/Bulk |
+| GET\|HEAD | scim/v2/ResourceTypes |
+| GET\|HEAD | scim/v2/ResourceTypes/{id} |
+| GET\|HEAD | scim/v2/Schemas |
+| GET\|HEAD | scim/v2/Schemas/{id} |
+| GET\|HEAD | scim/v2/ServiceProviderConfig |
+| GET\|HEAD | scim/v2/{fallbackPlaceholder} |
+| GET\|HEAD | scim/v2/{resourceType} |
+| POST | scim/v2/{resourceType} |
+| POST | scim/v2/{resourceType}/.search |
+| GET\|HEAD | scim/v2/{resourceType}/{resourceObject} |
+| PUT | scim/v2/{resourceType}/{resourceObject} |
+| PATCH | scim/v2/{resourceType}/{resourceObject} |
+| DELETE | scim/v2/{resourceType}/{resourceObject} |
+
 
 # Configuration
 

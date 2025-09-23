@@ -127,6 +127,7 @@ class ResourceController extends Controller
 
                 {$request->getContent()}
                 EOF);
+                throw $e; //re-raise to get the correct output
             }
         } else {
             return $function($this, $request, $pdp, $resourceType, ...$params);

@@ -333,26 +333,26 @@ class ResourceController extends Controller
                 }
 
                 if($request->input('cursor')){
-                $cursor = @Cursor::fromEncoded($request->input('cursor'));
+                    $cursor = @Cursor::fromEncoded($request->input('cursor'));
 
-                if($cursor == null){
-                    throw (new SCIMException('Invalid Cursor'))->setCode(400)->setScimType('invalidCursor');
+                    if($cursor == null){
+                        throw (new SCIMException('Invalid Cursor'))->setCode(400)->setScimType('invalidCursor');
+                    }
                 }
-            }
 
-            $countRaw = $request->input('count');
+                $countRaw = $request->input('count');
 
-            if($countRaw < 1 || $countRaw > config('scim.pagination.maxPageSize')){
-                throw (new SCIMException(
-                    sprintf('Count value is invalid. Count value must be between 1 - and maxPageSize (%s) (when using cursor pagination)', config('scim.pagination.maxPageSize'))
-                ))->setCode(400)->setScimType('invalidCount');
-            }
-            
-            $resourceObjects = $resourceObjects->cursorPaginate(
-                $count,
-                cursor: $request->input('cursor')
-            );
-            $resources = collect($resourceObjects->items());
+                if($countRaw < 1 || $countRaw > config('scim.pagination.maxPageSize')){
+                    throw (new SCIMException(
+                        sprintf('Count value is invalid. Count value must be between 1 - and maxPageSize (%s) (when using cursor pagination)', config('scim.pagination.maxPageSize'))
+                    ))->setCode(400)->setScimType('invalidCount');
+                }
+
+                $resourceObjects = $resourceObjects->cursorPaginate(
+                    $count,
+                    cursor: $request->input('cursor')
+                );
+                $resources = collect($resourceObjects->items());
 
             
             } else {

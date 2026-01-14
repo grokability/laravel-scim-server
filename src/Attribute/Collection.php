@@ -21,6 +21,10 @@ class Collection extends AttributeMapping
         //only for creation requests
         if ($object->id == null) {
             foreach ($value as $key => $v) {
+                $subnode = $this->getSubNode($key);
+                if(!$subnode) {
+                    throw (new SCIMException(sprintf('Unknown subnode attribute "%s"', $key)))->setCode(400);
+                }
                 $this->getSubNode($key)->add($v, $object);
             }
         } else {

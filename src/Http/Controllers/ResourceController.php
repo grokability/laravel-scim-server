@@ -20,6 +20,7 @@ use Illuminate\Contracts\Pagination\CursorPaginator;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Pagination\Cursor;
 use Illuminate\Support\Facades\Validator;
+use Log;
 
 class ResourceController extends Controller
 {
@@ -91,6 +92,50 @@ class ResourceController extends Controller
     }
 
     /**
+     * Log a SCIM controller method invocation (if configured)
+     * 
+     */
+    public function scimlog(Callable $function, Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, ...$params)
+    {
+        // I really wanted to include the 'Model' up there in the signature, but the index method doesn't have a model
+        // and I realized I can derive enough of the model information from the URL, so I figured this way is okay,
+        // and the above signature *will* work for any of the SCIM methods we have here in this controller.
+
+        // Also the Callable $function expects the value of $this as the first parameter, which, in all of the
+        // function definitions, we call $that - to avoid naming conflicts with $this. It's a little weird. Keep an
+        // eye out (also comments embedded in each invocation of this method, just to be clear.
+        if (config('scim.trace')) {
+            try {
+                $response = $function($this, $request, $pdp, $resourceType, ...$params);
+                $response_text = method_exists($response, 'toJson') ? $response->toJson() : $response; // very not sure about this; not sure if other responses will parse right - FIXME
+                $logmsg = <<< EOF
+                =====================================================================================
+                {$request->method()} {$request->fullUrl()}
+                
+                {$request->getContent()}
+                -------------------------------------------------------------------------------------
+                $response_text
+                EOF;
+                Log::channel('scimtrace')->info($logmsg);
+                return $response;
+            } catch (\Throwable $e) {
+                $error_class = get_class($e);
+                Log::channel('scimtrace')->error(<<<EOF
+                =====================================================================================
+                Exception caught! {$e->getMessage()} of type: $error_class when executing:
+                {$request->method()} {$request->fullUrl()}
+
+                {$request->getContent()}
+                EOF);
+                throw $e; //re-raise to get the correct output
+            }
+        } else {
+            return $function($this, $request, $pdp, $resourceType, ...$params);
+        }
+    }
+
+
+    /**
      * Create a new scim resource
      *
      * @param  Request      $request
@@ -100,62 +145,84 @@ class ResourceController extends Controller
      */
     public function create(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, $isMe = false)
     {
-        $resourceObject = $this->createObject($request, $pdp, $resourceType, $isMe);
+        return $this->scimlog(function ($that, $request,  $pdp, $resourceType, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $resourceObject = $that->createObject($request, $pdp, $resourceType, $isMe);
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType)->setStatusCode(201);
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType)->setStatusCode(201);
+
+        }, $request, $pdp, $resourceType, $isMe); /* okay *HERE* I don't need it, right? */
     }
 
     public function show(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject)
     {
-        event(new Get($resourceObject, $resourceType, null, $request->input()));
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            event(new Get($resourceObject, $resourceType, null, $request->input()));
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+        },$request, $pdp, $resourceType, $resourceObject);
     }
 
     public function delete(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject)
     {
-        $resourceObject->delete();
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $resourceObject->delete();
 
-        event(new Delete($resourceObject, $resourceType, null, $request->input()));
+            event(new Delete($resourceObject, $resourceType, null, $request->input()));
 
-        return response(null, 204);
+            return response(null, 204);
+
+        }, $request, $pdp, $resourceType, $resourceObject);
     }
 
     public function replace(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject, $isMe = false)
     {
-        $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
 
-        $resourceType->getMapping()->replace($request->input(), $resourceObject, null, true);
+            $resourceType->getMapping()->replace($request->input(), $resourceObject, null, true);
 
-        $newObject = Helper::flatten(Helper::objectToSCIMArray($resourceObject, $resourceType), $resourceType->getSchema());
+            $newObject = Helper::flatten(Helper::objectToSCIMArray($resourceObject, $resourceType), $resourceType->getSchema());
 
-        $flattened = $this->validateScim($resourceType, $newObject, $resourceObject);
+            $flattened = $this->validateScim($resourceType, $newObject, $resourceObject);
 
-        if (!static::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PATCH, $flattened, $resourceType, null)) {
-            throw new SCIMException('This is not allowed');
-        }
+            if (!static::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PATCH, $flattened, $resourceType, null)) {
+                throw new SCIMException('This is not allowed');
+            }
 
-        $resourceObject->save();
+            $resourceObject->save();
 
-        event(new Replace($resourceObject, $resourceType, $isMe, $request->input(), $originalRaw));
+            event(new Replace($resourceObject, $resourceType, $isMe, $request->input(), $originalRaw));
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+        }, $request, $pdp, $resourceType, $resourceObject, $isMe);
     }
 
     public function update(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType, Model $resourceObject, $isMe = false)
     {
-        $input = $request->input();
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType, $resourceObject, $isMe) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $input = $request->input();
 
-        if ($input['schemas'] !== ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]) {
-            throw (new SCIMException(sprintf('Invalid schema "%s". MUST be "urn:ietf:params:scim:api:messages:2.0:PatchOp"', json_encode($input['schemas']))))->setCode(404);
-        }
+            if ($input['schemas'] !== ["urn:ietf:params:scim:api:messages:2.0:PatchOp"]) {
+                throw (new SCIMException(sprintf('Invalid schema "%s". MUST be "urn:ietf:params:scim:api:messages:2.0:PatchOp"', json_encode($input['schemas']))))->setCode(404);
+            }
 
-        if (isset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'])) {
-            $input['Operations'] = $input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'];
-            unset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations']);
-        }
+            if (isset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'])) {
+                $input['Operations'] = $input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'];
+                unset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations']);
+            }
 
-        $oldObject = Helper::objectToSCIMArray($resourceObject, $resourceType);
+            $oldObject = Helper::objectToSCIMArray($resourceObject, $resourceType);
+
 
         foreach ($input['Operations'] as $operation) {
             switch (strtolower($operation['op'])) {
@@ -175,26 +242,28 @@ class ResourceController extends Controller
                     $resourceType->getMapping()->patch('replace', $operation['value'], $resourceObject, ParserParser::parse($operation['path'] ?? null));
                     break;
 
-                default:
-                    throw new SCIMException(sprintf('Operation "%s" is not supported', $operation['op']));
+                    default:
+                        throw new SCIMException(sprintf('Operation "%s" is not supported', $operation['op']));
+                }
             }
-        }
 
-        $dirty = $resourceObject->getDirty();
+            $dirty = $resourceObject->getDirty();
 
-        $newObject = Helper::flatten(Helper::objectToSCIMArray($resourceObject, $resourceType), $resourceType->getSchema());
+            // TODO: prevent something from getten written before ...
+            $newObject = Helper::flatten(Helper::objectToSCIMArray($resourceObject, $resourceType), $resourceType->getSchema());
 
-        $flattened = $this->validateScim($resourceType, $newObject, $resourceObject);
+            $flattened = $that->validateScim($resourceType, $newObject, $resourceObject);
 
-        if (!static::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PATCH, $flattened, $resourceType, null)) {
-            throw new SCIMException('This is not allowed');
-        }
+            if (!static::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PATCH, $flattened, $resourceType, null)) {
+                throw new SCIMException('This is not allowed');
+            }
 
-        $resourceObject->save();
+            $resourceObject->save();
 
-        event(new Patch($resourceObject, $resourceType, $isMe, $request->input(), $oldObject));
+            event(new Patch($resourceObject, $resourceType, $isMe, $request->input(), $oldObject));
 
-        return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+            return Helper::objectToSCIMResponse($resourceObject, $resourceType);
+        }, $request, $pdp, $resourceType, $resourceObject, $isMe);
     }
 
 
@@ -211,113 +280,118 @@ class ResourceController extends Controller
 
     public function index(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType)
     {
-        $query = $resourceType->getQuery();
+        return $this->scimlog(function ($that, $request, $pdp, $resourceType) {
+            /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
+               so we don't have $this available */
+            $query = $resourceType->getQuery();
 
-        // if both cursor and startIndex are present, throw an exception
-        if ($request->has('cursor') && $request->has('startIndex')) {
-            throw (new SCIMException('Both cursor and startIndex are present. Only one of them is allowed.'))->setCode(400);
-        }
+            // if both cursor and startIndex are present, throw an exception
+            if ($request->has('cursor') && $request->has('startIndex')) {
+                throw (new SCIMException('Both cursor and startIndex are present. Only one of them is allowed.'))->setCode(400);
+            }
 
-        // Non-negative integer. Specifies the desired maximum number of query results per page, e.g., 10. A negative value SHALL be interpreted as "0". A value of "0" indicates that no resource results are to be returned except for "totalResults".
-        $count = min(max(0, intVal($request->input('count', config('scim.pagination.defaultPageSize')))), config('scim.pagination.maxPageSize'));
+            // Non-negative integer. Specifies the desired maximum number of query results per page, e.g., 10. A negative value SHALL be interpreted as "0". A value of "0" indicates that no resource results are to be returned except for "totalResults".
+            $count = min(max(0, intVal($request->input('count', config('scim.pagination.defaultPageSize')))), config('scim.pagination.maxPageSize'));
 
-        $startIndex = null;
-        $sortBy = null;
+            $startIndex = null;
+            $sortBy = null;
 
-        if ($request->input('sortBy')) {
-            $sortBy = $resourceType->getMapping()->getSortAttributeByPath(\ArieTimmerman\Laravel\SCIMServer\Parser\Parser::parse($request->input('sortBy')));
-        }
+            if ($request->input('sortBy')) {
+                $sortBy = $resourceType->getMapping()->getSortAttributeByPath(\ArieTimmerman\Laravel\SCIMServer\Parser\Parser::parse($request->input('sortBy')));
+            }
 
-        $resourceObjectsBase = $query->when(
-            $filter = $request->input('filter'),
-            function (Builder $query) use ($filter, $resourceType) {
-                try {
+            $resourceObjectsBase = $query->when(
+                $filter = $request->input('filter'),
+                function (Builder $query) use ($filter, $resourceType) {
+                    try {
 
-                    Helper::scimFilterToLaravelQuery($resourceType, $query, ParserParser::parseFilter($filter));
-                } catch (\Tmilos\ScimFilterParser\Error\FilterException $e) {
-                    throw (new SCIMException($e->getMessage()))->setCode(400)->setScimType('invalidFilter');
+                        Helper::scimFilterToLaravelQuery($resourceType, $query, ParserParser::parseFilter($filter));
+                    } catch (\Tmilos\ScimFilterParser\Error\FilterException $e) {
+                        throw (new SCIMException($e->getMessage()))->setCode(400)->setScimType('invalidFilter');
+                    }
                 }
-            }
-        );
-
-        $totalResults = $resourceObjectsBase->count();
-
-        /**
-         * @var \Illuminate\Database\Query\Builder $resourceObjects
-         */
-        $resourceObjects = $resourceObjectsBase
-            ->with($resourceType->getWithRelations());
-
-        if ($sortBy != null) {
-            $direction = $request->input('sortOrder') == 'descending' ? 'desc' : 'asc';
-
-            $resourceObjects = $resourceObjects->orderBy($sortBy, $direction);
-        }
-
-        $resources = null;
-        if ($request->has('cursor')) {
-            if($sortBy == null){
-                $resourceObjects = $resourceObjects->orderBy('id');
-            }
-
-            if($request->input('cursor')){
-                $cursor = @Cursor::fromEncoded($request->input('cursor'));
-
-                if($cursor == null){
-                    throw (new SCIMException('Invalid Cursor'))->setCode(400)->setScimType('invalidCursor');
-                }
-            }
-
-            $countRaw = $request->input('count');
-
-            if($countRaw < 1 || $countRaw > config('scim.pagination.maxPageSize')){
-                throw (new SCIMException(
-                    sprintf('Count value is invalid. Count value must be between 1 - and maxPageSize (%s) (when using cursor pagination)', config('scim.pagination.maxPageSize'))
-                ))->setCode(400)->setScimType('invalidCount');
-            }
-            
-            $resourceObjects = $resourceObjects->cursorPaginate(
-                $count,
-                cursor: $request->input('cursor')
             );
-            $resources = collect($resourceObjects->items());
+
+            $totalResults = $resourceObjectsBase->count();
+
+            /**
+             * @var \Illuminate\Database\Query\Builder $resourceObjects
+             */
+            $resourceObjects = $resourceObjectsBase
+                ->with($resourceType->getWithRelations());
+
+            if ($sortBy != null) {
+                $direction = $request->input('sortOrder') == 'descending' ? 'desc' : 'asc';
+
+                $resourceObjects = $resourceObjects->orderBy($sortBy, $direction);
+            }
+
+            $resources = null;
+            if ($request->has('cursor')) {
+                if($sortBy == null){
+                    $resourceObjects = $resourceObjects->orderBy('id');
+                }
+
+                if($request->input('cursor')){
+                    $cursor = @Cursor::fromEncoded($request->input('cursor'));
+
+                    if($cursor == null){
+                        throw (new SCIMException('Invalid Cursor'))->setCode(400)->setScimType('invalidCursor');
+                    }
+                }
+
+                $countRaw = $request->input('count');
+
+                if($countRaw < 1 || $countRaw > config('scim.pagination.maxPageSize')){
+                    throw (new SCIMException(
+                        sprintf('Count value is invalid. Count value must be between 1 - and maxPageSize (%s) (when using cursor pagination)', config('scim.pagination.maxPageSize'))
+                    ))->setCode(400)->setScimType('invalidCount');
+                }
+
+                $resourceObjects = $resourceObjects->cursorPaginate(
+                    $count,
+                    cursor: $request->input('cursor')
+                );
+                $resources = collect($resourceObjects->items());
 
             
-        } else {
-            // The 1-based index of the first query result. A value less than 1 SHALL be interpreted as 1.
-            $startIndex = max(1, intVal($request->input('startIndex', 0)));
+            } else {
+                // The 1-based index of the first query result. A value less than 1 SHALL be interpreted as 1.
+                $startIndex = max(1, intVal($request->input('startIndex', 0)));
 
-            $resourceObjects = $resourceObjects->skip($startIndex - 1)->take($count);
-            $resources = $resourceObjects->get();
-        }
+                $resourceObjects = $resourceObjects->skip($startIndex - 1)->take($count);
+                $resources = $resourceObjects->get();
+            }
 
-        // TODO: splitting the attributes parameters by dot and comma is not correct, but works in most cases
-        // if body contains attributes and this is an array, use that, else use existing
-        if($request->json('attributes') && is_array($request->json('attributes'))){
-            $attributes = $request->json('attributes');
-        } else {
-            $attributes = $request->input('attributes') ? preg_split('/[,.]/', $request->input('attributes')) : [];
-        }
+            // TODO: splitting the attributes parameters by dot and comma is not correct, but works in most cases
+            // if body contains attributes and this is an array, use that, else use existing
+            if($request->json('attributes') && is_array($request->json('attributes'))){
+                $attributes = $request->json('attributes');
+            } else {
+                $attributes = $request->input('attributes') ? preg_split('/[,.]/', $request->input('attributes')) : [];
+            }
 
-        if (!empty($attributes)) {
-            $attributes[] = 'id';
-            $attributes[] = 'meta';
-            $attributes[] = 'schemas';
-        }
+            if (!empty($attributes)) {
+                $attributes[] = 'id';
+                $attributes[] = 'meta';
+                $attributes[] = 'schemas';
+            }
 
-        // TODO: implement excludedAttributes
-        $excludedAttributes = [];
+            // TODO: implement excludedAttributes
+            $excludedAttributes = [];
 
-        return new ListResponse(
-            $resources,
-            $startIndex,
-            $totalResults,
-            $attributes,
-            $excludedAttributes,
-            $resourceType,
-            ($resourceObjects instanceof CursorPaginator) ? $resourceObjects->nextCursor()?->encode() : null,
-            ($resourceObjects instanceof CursorPaginator) ? $resourceObjects->previousCursor()?->encode() : null
-        );
+            return new ListResponse(
+                $resources,
+                $startIndex,
+                $totalResults,
+                $attributes,
+                $excludedAttributes,
+                $resourceType,
+                ($resourceObjects instanceof CursorPaginator) ? $resourceObjects->nextCursor()?->encode() : null,
+                ($resourceObjects instanceof CursorPaginator) ? $resourceObjects->previousCursor()?->encode() : null
+            );
+        }, $request, $pdp, $resourceType);
+
     }
 
     public function search(Request $request, PolicyDecisionPoint $pdp, ResourceType $resourceType){

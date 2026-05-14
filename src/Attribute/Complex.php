@@ -210,7 +210,10 @@ class Complex extends AbstractComplex
                     ];
                 }
 
-                $subNode->add($newValue, $object);
+                if ($subNode !== null) {
+                    $subNode->add($newValue, $object);
+                }
+
             }
         }
 

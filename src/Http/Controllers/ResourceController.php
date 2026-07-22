@@ -190,57 +190,6 @@ class ResourceController extends Controller
             /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
                so we don't have $this available */
             $originalRaw = Helper::objectToSCIMArray($resourceObject, $resourceType);
-            $original = Helper::flatten($originalRaw, $request->input()['schemas']);
-
-            //TODO: get flattend from $resourceObject
-            $flattened = Helper::flatten($request->input(), $request->input()['schemas']);
-            $flattened = $that->validateScim($resourceType, $flattened, $resourceObject);
-
-            $updated = [];
-
-            foreach ($flattened as $key => $value) {
-                if (!isset($original[$key]) || json_encode($original[$key]) != json_encode($flattened[$key])) {
-                    $updated[$key] = $flattened[$key];
-                }
-            }
-
-            if (!self::isAllowed($pdp, $request, PolicyDecisionPoint::OPERATION_PUT, $updated, $resourceType, null)) {
-                throw new SCIMException('This is not allowed');
-            }
-
-            //Keep an array of written values
-            $uses = [];
-
-            //Write all values
-            foreach ($flattened as $scimAttribute => $value) {
-                $attributeConfig = Helper::getAttributeConfigOrFail($resourceType, $scimAttribute);
-
-                if ($attributeConfig->isWriteSupported()) {
-                    $attributeConfig->replace($value, $resourceObject);
-                }
-
-                $uses[] = $attributeConfig;
-            }
-
-            //Find values that have not been written in order to empty these.
-            $allAttributeConfigs = $resourceType->getAllAttributeConfigs();
-
-            foreach ($uses as $use) {
-                foreach ($allAttributeConfigs as $key => $option) {
-                    if ($use->getFullKey() == $option->getFullKey()) {
-                        unset($allAttributeConfigs[$key]);
-                    }
-                }
-            }
-
-            foreach ($allAttributeConfigs as $attributeConfig) {
-                // Do not write write-only attribtues (such as passwords)
-                if ($attributeConfig->isReadSupported() && $attributeConfig->isWriteSupported()) {
-                    //   $attributeConfig->remove($resourceObject);
-                }
-            }
-
-            $resourceObject->save();
 
             $resourceType->getMapping()->replace($request->input(), $resourceObject, null, true);
 
@@ -275,7 +224,6 @@ class ResourceController extends Controller
                 $input['Operations'] = $input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations'];
                 unset($input['urn:ietf:params:scim:api:messages:2.0:PatchOp:Operations']);
             }
-
 
             $oldObject = Helper::objectToSCIMArray($resourceObject, $resourceType);
 
@@ -339,7 +287,6 @@ class ResourceController extends Controller
         return $this->scimlog(function ($that, $request, $pdp, $resourceType) {
             /* we have to pass $that (which will be the value of $this) because scimlog takes a *function* not a method,
                so we don't have $this available */
-
             $query = $resourceType->getQuery();
 
             // if both cursor and startIndex are present, throw an exception

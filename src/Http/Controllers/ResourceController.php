@@ -453,6 +453,11 @@ class ResourceController extends Controller
                 $resourceObjects = $resourceObjects->orderBy($sortBy, $direction);
             }
 
+            // Stable tiebreaker so LIMIT/OFFSET pagination can never overlap between pages
+            // when the caller-supplied sortBy is absent or non-unique. Appended last so an
+            // explicit sortBy still primarily orders by the caller's field.
+            $resourceObjects = $resourceObjects->orderBy($class::make()->getKeyName());
+
             $resourceObjects = $resourceObjects->get();
 
 

@@ -362,6 +362,11 @@ class ResourceController extends Controller
             } else {
                 // The 1-based index of the first query result. A value less than 1 SHALL be interpreted as 1.
                 $startIndex = max(1, intVal($request->input('startIndex', 0)));
+              
+                // Stable tiebreaker so LIMIT/OFFSET pagination can never overlap between pages
+                // when the caller-supplied sortBy is absent or non-unique. Appended last so an
+                // explicit sortBy still primarily orders by the caller's field.
+                $resourceObjects = $resourceObjects->orderBy('id');
 
                 $resourceObjects = $resourceObjects->skip($startIndex - 1)->take($count);
                 $resources = $resourceObjects->get();

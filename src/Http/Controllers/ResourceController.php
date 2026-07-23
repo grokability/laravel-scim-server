@@ -68,7 +68,7 @@ class ResourceController extends Controller
         /**
          * @var Model
         */
-        $resourceObject = $class::firstOrNew(['username' => $input['userName']]);
+        $resourceObject = $class::firstOrNew($request->has('userName') ? ['username' => $input['userName']]  : []);
         $resourceType->getMapping()->replace($input, $resourceObject);
 
         //validate

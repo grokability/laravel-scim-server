@@ -12,23 +12,33 @@ class MutableCollection extends Collection
     {
         $values = collect($value)->pluck('value')->all();
 
-        // Check if objects exist
-        $existingObjects = $object
-            ->{$this->attribute}()
-            ->getRelated()
-            ->findMany($values)
-            ->map(fn ($o) => $o->getKey());
+        $related = $object->{$this->attribute}()->getRelated();
 
-        if (($diff = collect($values)->diff($existingObjects))->count() > 0) {
+        // Check if objects exist. Keys only: findMany() hydrates a full model
+        // per id for a check that never looks past the key.
+        $existingObjectIds = $related->newQuery()
+            ->whereKey($values)
+            ->pluck($related->getKeyName());
+
+        if (($diff = collect($values)->diff($existingObjectIds))->count() > 0) {
             throw new SCIMException(
                 sprintf('One or more %s are unknown: %s', $this->attribute, implode(',', $diff->all())),
                 500
             );
         }
 
-        $object->{$this->attribute}()->syncWithoutDetaching($existingObjects->all());
+        // Attach only what is missing. syncWithoutDetaching() routes through
+        // sync(), which reads and hydrates every currently attached pivot row
+        // no matter how many ids this call touches.
+        $alreadyAttached = $object->{$this->attribute}()
+            ->whereKey($values)
+            ->pluck($related->getQualifiedKeyName());
 
-        $object->load($this->attribute);
+        $object->{$this->attribute}()->attach($existingObjectIds->diff($alreadyAttached)->all());
+
+        // Drop the stale relation rather than eagerly reloading it: load()
+        // rebuilds a model per member even when nothing reads them again.
+        $object->unsetRelation($this->attribute);
     }
 
     public function remove($value, Model &$object, ?Path $path = null)
@@ -65,7 +75,10 @@ class MutableCollection extends Collection
             $object->{$this->attribute}()->detach($values);
         }
 
-        $object->load($this->attribute);
+        // Both detach() calls above are already bounded by the ids being
+        // removed; load() then re-reads the entire remaining membership as
+        // models. Drop the stale relation instead.
+        $object->unsetRelation($this->attribute);
     }
 
     public function replace($value, Model &$object, ?Path $path = null)
